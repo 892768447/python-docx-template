@@ -1,3 +1,31 @@
+0.6.3 (2019-06-20)
+-------------------
+- PR #207 and #209
+
+0.6.2 (2019-06-09)
+-------------------
+- Handle spaces correctly when run are split by Jinja code (#205)
+
+0.6.1 (2019-06-05)
+-------------------
+- PR #203
+
+0.6.0 (2019-06-03)
+-------------------
+- DocxTemplate now accepts file-like objects (Thanks to edufresne)
+
+0.5.20 (2019-05-23)
+-------------------
+- Fix #199
+
+0.5.19 (2019-05-23)
+-------------------
+- Add support for file-like objects for replace_media (#197)
+
+0.5.18 (2019-05-20)
+-------------------
+- Fix  #176
+
 0.5.17 (2019-01-20)
 -------------------
 - Delegated autoescaping to Jinja2 Environment (#175)

@@ -5,8 +5,9 @@ Created : 2015-03-12
 @author: Eric Lapouyade
 '''
 import functools
+import io
 
-__version__ = '0.5.17'
+__version__ = '0.6.3'
 
 from lxml import etree
 from docx import Document
@@ -98,8 +99,12 @@ class DocxTemplate(object):
                          cellbg,src_xml,flags=re.DOTALL)
 
         # avoid {{r and {%r tags to strip MS xml tags too far
+        # ensure space preservation when splitting
+        src_xml = re.sub(r'<w:t>((?:(?!<w:t>).)*)({{r\s.*?}}|{%r\s.*?%})',
+                         r'<w:t xml:space="preserve">\1\2',
+                         src_xml,flags=re.DOTALL)
         src_xml = re.sub(r'({{r\s.*?}}|{%r\s.*?%})',
-                         r'</w:t></w:r><w:r><w:t>\1</w:t></w:r><w:r><w:t>',
+                         r'</w:t></w:r><w:r><w:t xml:space="preserve">\1</w:t></w:r><w:r><w:t xml:space="preserve">',
                          src_xml,flags=re.DOTALL)
 
         for y in ['tr', 'tc', 'p', 'r']:
@@ -355,8 +360,11 @@ class DocxTemplate(object):
 
                 # Distribute `removed_width` across all columns that has
                 # left after extras removal.
-                extra_space = removed_width / len(columns_left)
-                extra_space = int(extra_space)
+                extra_space = 0
+                if len(columns_left) > 0:
+                    extra_space = removed_width / len(columns_left)
+                    extra_space = int(extra_space)
+
 
                 for c in columns_left:
                     c.set(ns+'w', str(int(float(c.get(ns+'w')) + extra_space)))
@@ -367,10 +375,14 @@ class DocxTemplate(object):
         return Subdoc(self,docpath)
 
     @staticmethod
-    def get_file_crc(filename):
-        with open(filename, 'rb') as fh:
-            buf = fh.read()
-            crc = (binascii.crc32(buf) & 0xFFFFFFFF)
+    def get_file_crc(file_obj):
+        if hasattr(file_obj, 'read'):
+            buf = file_obj.read()
+        else:
+            with open(file_obj, 'rb') as fh:
+                buf = fh.read()
+
+        crc = (binascii.crc32(buf) & 0xFFFFFFFF)
         return crc
 
     def replace_media(self,src_file,dst_file):
@@ -379,17 +391,24 @@ class DocxTemplate(object):
         This has been done mainly because it is not possible to add images in
         docx header/footer.
         With this function, put a dummy picture in your header/footer,
-        then specify it with its replacement in this function
+        then specify it with its replacement in this function using the file path
+        or file-like objects.
 
         Syntax: tpl.replace_media('dummy_media_to_replace.png','media_to_paste.jpg')
+            -- or --
+                tpl.replace_media(io.BytesIO(image_stream), io.BytesIO(new_image_stream))
 
         Note: for images, the aspect ratio will be the same as the replaced image
         Note2 : it is important to have the source media file as it is required
                 to calculate its CRC to find them in the docx
         """
-        with open(dst_file, 'rb') as fh:
-            crc = self.get_file_crc(src_file)
-            self.crc_to_new_media[crc] = fh.read()
+
+        crc = self.get_file_crc(src_file)
+        if hasattr(dst_file, 'read'):
+            self.crc_to_new_media[crc] = dst_file.read()
+        else:
+            with open(dst_file, 'rb') as fh:
+                self.crc_to_new_media[crc] = fh.read()
 
     def replace_pic(self,embedded_file,dst_file):
         """Replace embedded picture with original-name given by embedded_file.
@@ -436,13 +455,23 @@ class DocxTemplate(object):
             crc = self.get_file_crc(src_file)
             self.crc_to_new_embedded[crc] = fh.read()
 
-    def post_processing(self,docx_filename):
+    def post_processing(self, docx_file):
         if self.crc_to_new_media or self.crc_to_new_embedded:
-            backup_filename = '%s_docxtpl_before_replace_medias' % docx_filename
-            os.rename(docx_filename,backup_filename)
 
-            with zipfile.ZipFile(backup_filename) as zin:
-                with zipfile.ZipFile(docx_filename, 'w') as zout:
+            if hasattr(docx_file, 'read'):
+                tmp_file = io.BytesIO()
+                DocxTemplate(docx_file).save(tmp_file)
+                tmp_file.seek(0)
+                docx_file.seek(0)
+                docx_file.truncate()
+                docx_file.seek(0)
+
+            else:
+                tmp_file = '%s_docxtpl_before_replace_medias' % docx_file
+                os.rename(docx_file, tmp_file)
+
+            with zipfile.ZipFile(tmp_file) as zin:
+                with zipfile.ZipFile(docx_file, 'w') as zout:
                     for item in zin.infolist():
                         buf = zin.read(item.filename)
                         if ( item.filename.startswith('word/media/') and
@@ -454,7 +483,10 @@ class DocxTemplate(object):
                         else:
                             zout.writestr(item, buf)
 
-            os.remove(backup_filename)
+            if not hasattr(tmp_file, 'read'):
+                os.remove(tmp_file)
+            if hasattr(docx_file, 'read'):
+                docx_file.seek(0)
 
     def pre_processing(self):
 
@@ -528,13 +560,17 @@ class DocxTemplate(object):
         self.docx.save(filename,*args,**kwargs)
         self.post_processing(filename)
 
-    @property
-    def undeclared_template_variables(self):
+    def get_undeclared_template_variables(self, jinja_env=None):
         xml = self.get_xml()
         xml = self.patch_xml(xml)
-        env = Environment()
+        if jinja_env:
+            env = jinja_env
+        else:
+            env = Environment()
         parse_content = env.parse(xml)
         return meta.find_undeclared_variables(parse_content)
+
+    undeclared_template_variables = property(get_undeclared_template_variables)
 
 
 class Subdoc(object):
